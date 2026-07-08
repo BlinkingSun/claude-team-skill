@@ -1,0 +1,197 @@
+#!/bin/bash
+# claude-ask — headless Claude Code bridge, twin of grok-ask.
+# Sends a prompt to a headless `claude -p` session, keeps per-channel
+# conversation state so follow-ups share context, and logs every exchange.
+# Used for DETACHED/PERSISTENT Claude teammates; for executors inside a live
+# Claude session, the native Agent tool is usually better (see /team skill).
+#
+# Usage: claude-ask [options] "prompt"
+#   -c, --channel NAME   Conversation channel (default: "default"). Each
+#                        channel is an independent persistent Claude session.
+#   -n, --new            Start a fresh session on this channel (drops context)
+#   -w, --work           Worker mode: bypassPermissions — edits files, runs
+#                        commands in --cwd. Default is consult mode: read/
+#                        search/web only (Bash, Edit, Write denied).
+#   -d, --cwd DIR        Working directory (default: $PWD)
+#   -m, --model MODEL    Model: haiku | sonnet | opus | full model id
+#                        (default: your configured default model)
+#   -f, --file PATH      Inline a file's content into the prompt (repeatable)
+#   -t, --timeout SECS   Kill the call after SECS seconds
+#   -j, --json           Print the raw JSON result instead of just the text
+#       --status         Show channel session info and exit
+#       --channels       List all channels and exit
+#
+# Examples:
+#   claude-ask -m opus -w -c task-a -d ~/scratch/task-a "Implement per SPEC.md; run tests"
+#   claude-ask -m sonnet -c refactor "Rename Foo to Bar across src/ — list the files first"
+#   claude-ask -c task-a "Test 3 fails with X — fix it"      # follow-up, same context
+
+set -u
+
+BRIDGE_DIR="$HOME/agent-team"
+CHANNEL_DIR="$BRIDGE_DIR/channels"
+LOG_DIR="$BRIDGE_DIR/logs"
+
+# claude installs under fnm's per-shell node path — resolve at runtime.
+CLAUDE_BIN="${CLAUDE_ASK_BIN:-$(command -v claude || true)}"
+
+CHANNEL="default"
+NEW_SESSION=0
+WORK_MODE=0
+WORK_CWD="$PWD"
+MODEL=""
+TIMEOUT=""
+RAW_JSON=0
+FILES=()
+PROMPT=""
+
+die() { echo "claude-ask: $*" >&2; exit 1; }
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -c|--channel)  CHANNEL="$2"; shift 2 ;;
+    -n|--new)      NEW_SESSION=1; shift ;;
+    -w|--work)     WORK_MODE=1; shift ;;
+    -d|--cwd)      WORK_CWD="$2"; shift 2 ;;
+    -m|--model)    MODEL="$2"; shift 2 ;;
+    -f|--file)     FILES+=("$2"); shift 2 ;;
+    -t|--timeout)  TIMEOUT="$2"; shift 2 ;;
+    -j|--json)     RAW_JSON=1; shift ;;
+    --status)
+      STATE="$CHANNEL_DIR/$CHANNEL.json"
+      if [[ -f "$STATE" ]]; then cat "$STATE"; else echo "channel '$CHANNEL': no session yet"; fi
+      exit 0 ;;
+    --channels)
+      ls -1 "$CHANNEL_DIR" 2>/dev/null | sed 's/\.json$//' || true
+      exit 0 ;;
+    -h|--help)     sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --)            shift; PROMPT="$*"; break ;;
+    -*)            die "unknown option: $1 (see --help)" ;;
+    *)             PROMPT="$1"; shift ;;
+  esac
+done
+
+[[ -n "$PROMPT" ]] || die "no prompt given (see --help)"
+[[ -n "$CLAUDE_BIN" && -x "$CLAUDE_BIN" ]] || die "claude binary not found (set CLAUDE_ASK_BIN or fix PATH)"
+[[ -d "$WORK_CWD" ]] || die "cwd does not exist: $WORK_CWD"
+[[ "$CHANNEL" =~ ^[A-Za-z0-9._-]+$ ]] || die "channel name must be [A-Za-z0-9._-]+"
+
+mkdir -p "$CHANNEL_DIR" "$LOG_DIR"
+STATE_FILE="$CHANNEL_DIR/$CHANNEL.json"
+LOG_FILE="$LOG_DIR/$CHANNEL.jsonl"
+
+# Inline attached files into the prompt.
+for f in "${FILES[@]:-}"; do
+  [[ -z "$f" ]] && continue
+  [[ -f "$f" ]] || die "attached file not found: $f"
+  PROMPT+=$'\n\n--- FILE: '"$f"$' ---\n'"$(cat "$f")"$'\n--- END FILE ---'
+done
+
+# Resolve existing session for this channel (unless --new).
+SESSION_ID=""
+if [[ $NEW_SESSION -eq 0 && -f "$STATE_FILE" ]]; then
+  SESSION_ID=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("sessionId",""))' "$STATE_FILE" 2>/dev/null)
+fi
+
+build_args() {
+  ARGS=(-p "$PROMPT" --output-format json)
+  [[ -n "$MODEL" ]] && ARGS+=(--model "$MODEL")
+  [[ -n "$SESSION_ID" ]] && ARGS+=(--resume "$SESSION_ID")
+  if [[ $WORK_MODE -eq 1 ]]; then
+    # Full tool access — caller is responsible for pointing -d at a safe dir.
+    ARGS+=(--permission-mode bypassPermissions)
+  else
+    # Consult mode: read, search, and web only — never modify.
+    ARGS+=(--disallowedTools "Bash" "Edit" "Write" "NotebookEdit")
+  fi
+}
+
+run_claude() {
+  build_args
+  if [[ -n "$TIMEOUT" ]]; then
+    (cd "$WORK_CWD" && perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" "$CLAUDE_BIN" "${ARGS[@]}")
+  else
+    (cd "$WORK_CWD" && "$CLAUDE_BIN" "${ARGS[@]}")
+  fi
+}
+
+REPLY_JSON=$(run_claude)
+RC=$?
+
+# If resuming failed (session evicted/missing), retry once with a fresh session.
+if [[ $RC -ne 0 && -n "$SESSION_ID" ]]; then
+  echo "claude-ask: resume of session $SESSION_ID failed (rc=$RC); starting fresh session on channel '$CHANNEL'" >&2
+  SESSION_ID=""
+  REPLY_JSON=$(run_claude)
+  RC=$?
+fi
+
+if [[ $RC -ne 0 ]]; then
+  echo "claude-ask: claude exited with rc=$RC" >&2
+  [[ -n "$REPLY_JSON" ]] && echo "$REPLY_JSON" >&2
+  exit $RC
+fi
+
+# Parse reply, persist channel state, append to log, print text.
+export CA_CHANNEL="$CHANNEL" CA_MODE=$([[ $WORK_MODE -eq 1 ]] && echo work || echo consult)
+export CA_CWD="$WORK_CWD" CA_STATE="$STATE_FILE" CA_LOG="$LOG_FILE"
+export CA_PROMPT="$PROMPT" CA_RAW="$RAW_JSON" CA_MODEL="$MODEL"
+
+CA_REPLY_FILE=$(mktemp /tmp/claude-ask.XXXXXX)
+export CA_REPLY_FILE
+printf '%s' "$REPLY_JSON" > "$CA_REPLY_FILE"
+
+python3 - <<'PYEOF'
+import json, os, sys, datetime
+
+path = os.environ["CA_REPLY_FILE"]
+with open(path) as f:
+    raw = f.read()
+os.unlink(path)
+
+try:
+    reply = json.loads(raw)
+except json.JSONDecodeError:
+    sys.stderr.write("claude-ask: could not parse claude output as JSON; raw output follows\n")
+    sys.stdout.write(raw)
+    sys.exit(3)
+
+now = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+state = {
+    "channel": os.environ["CA_CHANNEL"],
+    "sessionId": reply.get("session_id", ""),
+    "lastUsed": now,
+    "cwd": os.environ["CA_CWD"],
+    "mode": os.environ["CA_MODE"],
+    "model": os.environ["CA_MODEL"] or None,
+}
+with open(os.environ["CA_STATE"], "w") as f:
+    json.dump(state, f, indent=2)
+
+entry = {
+    "ts": now,
+    "channel": os.environ["CA_CHANNEL"],
+    "mode": os.environ["CA_MODE"],
+    "model": os.environ["CA_MODEL"] or None,
+    "cwd": os.environ["CA_CWD"],
+    "sessionId": reply.get("session_id"),
+    "numTurns": reply.get("num_turns"),
+    "isError": reply.get("is_error"),
+    "costUSD": reply.get("total_cost_usd"),
+    "prompt": os.environ["CA_PROMPT"],
+    "reply": reply.get("result", ""),
+}
+with open(os.environ["CA_LOG"], "a") as f:
+    f.write(json.dumps(entry) + "\n")
+
+if reply.get("is_error"):
+    sys.stderr.write(f"claude-ask: session ended with error ({reply.get('subtype')})\n")
+
+if os.environ["CA_RAW"] == "1":
+    print(json.dumps(reply, indent=2))
+else:
+    print(reply.get("result", ""))
+
+sys.exit(1 if reply.get("is_error") else 0)
+PYEOF

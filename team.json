@@ -1,0 +1,92 @@
+{
+  "_comment": "TEAM ROSTER — single source of truth for the /team skill. Edit this file to add/remove models or change who does what; the skill reads it fresh on every run and never hardcodes members. No skill edits needed.",
+  "version": 1,
+  "updated": "2026-07-08",
+
+  "members": [
+    {
+      "name": "orchestrator",
+      "provider": "anthropic",
+      "model": "(the current session's model)",
+      "invoke": { "method": "current-session" },
+      "strengths": ["decomposition", "architecture", "integration", "final review", "project context"],
+      "budget": "claude-plan",
+      "enabled": true,
+      "notes": "The orchestrating session itself. Never delegated to. Owns all git, signing, release, and deploy operations, and the final report to the user."
+    },
+    {
+      "name": "opus",
+      "provider": "anthropic",
+      "model": "opus",
+      "invoke": {
+        "method": "agent-tool",
+        "detached_alt": "claude-ask -m opus -w -c <channel> -d <dir> \"<spec>\""
+      },
+      "strengths": ["hard implementation", "subtle debugging", "algorithmic work"],
+      "budget": "claude-plan (heavy — spend deliberately)",
+      "enabled": true
+    },
+    {
+      "name": "sonnet",
+      "provider": "anthropic",
+      "model": "sonnet",
+      "invoke": {
+        "method": "agent-tool",
+        "detached_alt": "claude-ask -m sonnet -w -c <channel> -d <dir> \"<spec>\""
+      },
+      "strengths": ["solid general implementation", "refactors", "test writing"],
+      "budget": "claude-plan (moderate)",
+      "enabled": true
+    },
+    {
+      "name": "haiku",
+      "provider": "anthropic",
+      "model": "haiku",
+      "invoke": {
+        "method": "agent-tool",
+        "detached_alt": "claude-ask -m haiku -w -c <channel> -d <dir> \"<spec>\""
+      },
+      "strengths": ["mechanical edits", "boilerplate", "bulk file operations"],
+      "budget": "claude-plan (light)",
+      "enabled": true
+    },
+    {
+      "name": "second-provider",
+      "provider": "(xai | google | openai | local | ...)",
+      "model": "(whatever your wrapper drives)",
+      "invoke": {
+        "method": "wrapper",
+        "consult": "<your-wrapper> -c <channel> -d <dir> \"<prompt>\"",
+        "worker": "<your-wrapper> -w -c <channel> -d <dir> \"<spec>\""
+      },
+      "strengths": ["independent verification (different model family, zero shared bias)", "fresh-eyes review", "plan critique", "web-current research"],
+      "budget": "separate plan (does NOT consume Claude limits)",
+      "enabled": false,
+      "notes": "EXAMPLE — disabled until you bring a wrapper. Point invoke at any CLI exposing the claude-ask interface (-c channels, -w worker mode, -d cwd, -f attach, text reply on stdout); see the README wrapper contract. While disabled, audit/verify falls back to a different Claude model per the policies."
+    }
+  ],
+
+  "assignment": {
+    "_comment": "role -> member name. Executor is tiered by task difficulty. If an assigned member is disabled or missing, fall back per the policies below.",
+    "orchestrator": "orchestrator",
+    "executor": {
+      "hard": "opus",
+      "default": "sonnet",
+      "trivial": "haiku"
+    },
+    "plan_auditor": "second-provider",
+    "verifier": "second-provider",
+    "second_opinion": "second-provider",
+    "researcher": "second-provider"
+  },
+
+  "policies": [
+    "Every plan is audited by the plan_auditor (consult mode, read-only) before any executor starts. The audit must return: a verdict on the plan, an executor recommendation per subtask, and whether the plan should be split into independent pieces for parallel executors. The auditor advises; the orchestrator decides — but deviations from the audit are noted in the final report. Prefer an auditor from a different provider than the planner; if the assigned plan_auditor is disabled, fall back the same way as the verifier.",
+    "The verifier must be a different member than the executor of the task being verified. If the assigned verifier is disabled, use any enabled member from a different provider than the executor; as a last resort use a different Claude model than the one that wrote the code.",
+    "If an assigned executor tier is disabled, fall back: trivial -> default -> hard. Never silently upgrade to a heavier budget tier without noting it to the user.",
+    "Verifiers run in consult mode only (read-only). Executors run in worker mode only inside scratch dirs or git worktrees.",
+    "No member except the orchestrator may commit, push, sign, notarize, or deploy.",
+    "Never run any worker-mode member inside hardware-connected or release-critical directories (serial-connected equipment, device flashing, publish/deploy scripts).",
+    "Budget: prefer members whose budget field says they do not consume Claude limits for verification/research; reserve claude-plan (heavy) members for genuinely hard tasks."
+  ]
+}

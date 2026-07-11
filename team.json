@@ -1,18 +1,18 @@
 {
-  "_comment": "TEAM ROSTER — single source of truth for the /team skill. Edit this file to add/remove models or change who does what; the skill reads it fresh on every run and never hardcodes members. No skill edits needed.",
+  "_comment": "TEAM ROSTER — single source of truth for the /team skill. Edit this file to add/remove models or change who does what; the skill reads it fresh on every run and never hardcodes members. No skill edits needed. Shipped as the author's reference setup: Fable 5 orchestrating, Grok 4.5 (Grok Build CLI) auditing/verifying.",
   "version": 1,
-  "updated": "2026-07-08",
+  "updated": "2026-07-11",
 
   "members": [
     {
-      "name": "orchestrator",
+      "name": "fable",
       "provider": "anthropic",
-      "model": "(the current session's model)",
+      "model": "claude-fable-5",
       "invoke": { "method": "current-session" },
       "strengths": ["decomposition", "architecture", "integration", "final review", "project context"],
       "budget": "claude-plan",
       "enabled": true,
-      "notes": "The orchestrating session itself. Never delegated to. Owns all git, signing, release, and deploy operations, and the final report to the user."
+      "notes": "The orchestrating session itself — whatever model your session runs orchestrates (the reference setup runs Fable 5). Never delegated to. Owns all git, signing, release, and deploy operations, and the final report to the user."
     },
     {
       "name": "opus",
@@ -51,42 +51,44 @@
       "enabled": true
     },
     {
-      "name": "second-provider",
-      "provider": "(xai | google | openai | local | ...)",
-      "model": "(whatever your wrapper drives)",
+      "name": "grok-build",
+      "provider": "xai",
+      "model": "grok-composer-2.5-fast (default); pass -m grok-build for the heavier coder",
       "invoke": {
-        "method": "wrapper",
-        "consult": "<your-wrapper> -c <channel> -d <dir> \"<prompt>\"",
-        "worker": "<your-wrapper> -w -c <channel> -d <dir> \"<spec>\""
+        "method": "grok-ask",
+        "consult": "~/grok-bridge/bin/grok-ask -c <channel> -d <dir> \"<prompt>\"",
+        "worker": "~/grok-bridge/bin/grok-ask -w -c <channel> -d <dir> \"<spec>\""
       },
       "strengths": ["independent verification (different model family, zero shared bias)", "fresh-eyes review", "plan critique", "web-current research"],
-      "budget": "separate plan (does NOT consume Claude limits)",
-      "enabled": false,
-      "notes": "EXAMPLE — disabled until you bring a wrapper. Point invoke at any CLI exposing the claude-ask interface (-c channels, -w worker mode, -d cwd, -f attach, text reply on stdout); see the README wrapper contract. While disabled, audit/verify falls back to a different Claude model per the policies."
+      "budget": "grok-plan (SuperGrok / X Premium+ — does NOT consume Claude limits)",
+      "enabled": true,
+      "notes": "Grok 4.5 via the Grok Build CLI, driven headless by the claude-grok-bridge wrapper (github.com/BlinkingSun/claude-grok-bridge). Setup: curl -fsSL https://x.ai/cli/install.sh | bash; grok login (SuperGrok or X Premium+ subscription), then install the bridge. If the wrapper is missing at run time, treat this member as disabled — audit/verify falls back to a different Claude model per the policies. Any other backend works too: point invoke at any CLI exposing the same interface (-c channels, -w worker mode, -d cwd, -f attach, text reply on stdout); see the README wrapper contract."
     }
   ],
 
   "assignment": {
     "_comment": "role -> member name. Executor is tiered by task difficulty. If an assigned member is disabled or missing, fall back per the policies below.",
-    "orchestrator": "orchestrator",
+    "orchestrator": "fable",
     "executor": {
       "hard": "opus",
       "default": "sonnet",
       "trivial": "haiku"
     },
-    "plan_auditor": "second-provider",
-    "verifier": "second-provider",
-    "second_opinion": "second-provider",
-    "researcher": "second-provider"
+    "plan_auditor": "grok-build",
+    "verifier": "grok-build",
+    "second_opinion": "grok-build",
+    "researcher": "grok-build"
   },
 
   "policies": [
     "Every plan is audited by the plan_auditor (consult mode, read-only) before any executor starts. The audit must return: a verdict on the plan, an executor recommendation per subtask, and whether the plan should be split into independent pieces for parallel executors. The auditor advises; the orchestrator decides — but deviations from the audit are noted in the final report. Prefer an auditor from a different provider than the planner; if the assigned plan_auditor is disabled, fall back the same way as the verifier.",
     "The verifier must be a different member than the executor of the task being verified. If the assigned verifier is disabled, use any enabled member from a different provider than the executor; as a last resort use a different Claude model than the one that wrote the code.",
+    "A member whose wrapper or CLI is not installed is treated as disabled — apply the same fallbacks, and tell the user which member was unavailable.",
     "If an assigned executor tier is disabled, fall back: trivial -> default -> hard. Never silently upgrade to a heavier budget tier without noting it to the user.",
     "Verifiers run in consult mode only (read-only). Executors run in worker mode only inside scratch dirs or git worktrees.",
     "No member except the orchestrator may commit, push, sign, notarize, or deploy.",
     "Never run any worker-mode member inside hardware-connected or release-critical directories (serial-connected equipment, device flashing, publish/deploy scripts).",
-    "Budget: prefer members whose budget field says they do not consume Claude limits for verification/research; reserve claude-plan (heavy) members for genuinely hard tasks."
+    "Budget: prefer members whose budget field says they do not consume Claude limits for verification/research; reserve claude-plan (heavy) members for genuinely hard tasks.",
+    "Live team reports: relay each audit and verify result to the user as it lands — verdicts, contradictions, accepted vs rejected findings — not only in the final report."
   ]
 }

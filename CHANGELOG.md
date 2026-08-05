@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- New binding standing rule: **no autonomous destructive enforcement.** Members
+  must never arm automated guards/watchdogs that kill processes or revert state;
+  guards observe and alert only, with destructive responses requiring the
+  orchestrator's fresh explicit go-ahead. Born from a real incident: a
+  supervisor's stale-context build guard killed three legitimate integration
+  builds whose authorization it hadn't seen.
+
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).

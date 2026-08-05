@@ -133,6 +133,13 @@ overrode, total rework cycles. Credit findings to their finder.
 ## Standing rules
 
 - Roster `policies` are binding — read and apply them each run.
+- **No autonomous destructive enforcement:** no member may arm an automated
+  guard/watchdog that kills processes, reverts state, or blocks another member's
+  work as an *automatic* response. Guards may observe and ALERT only; any
+  destructive response requires the orchestrator's explicit go-ahead under fresh
+  context. Before enforcing a safety invariant, confirm with the orchestrator
+  that it still holds — user authorization or completed orchestrator steps may
+  have lifted it.
 - Live team reports (above) are part of the protocol, not a courtesy —
   disagreements between models surface when they happen.
 - Safety rails for all worker-mode members: scratch dirs/worktrees only;
